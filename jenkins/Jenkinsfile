@@ -77,11 +77,23 @@ stage('Verify AWS') {
 }
 
     stage('Verify Rollout') {
-      steps {
-        sh 'kubectl rollout status deployment/devops-demo-api -n devops-demo --timeout=120s'
-      }
+  steps {
+    withCredentials([
+      [$class: 'AmazonWebServicesCredentialsBinding',
+       credentialsId: 'aws-creds']
+    ]) {
+      sh '''
+        aws eks update-kubeconfig \
+          --region "$AWS_REGION" \
+          --name "$CLUSTER_NAME"
+
+        kubectl rollout status deployment/devops-demo-api \
+          -n devops-demo \
+          --timeout=120s
+      '''
     }
   }
+}
 
   post {
     success {
