@@ -31,7 +31,7 @@ module "eks" {
   private_subnet_ids  = module.vpc.private_subnet_ids
   public_subnet_ids   = module.vpc.public_subnet_ids
   node_instance_types = ["t3.medium"]
-  capacity_type       = "SPOT" # 💰 switch to ON_DEMAND only if Spot capacity is unavailable
+  capacity_type       = "ON_DEMAND" # 💰 switch to ON_DEMAND only if Spot capacity is unavailable
   desired_size        = 1
   min_size            = 1
   max_size            = 2

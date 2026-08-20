@@ -12,7 +12,7 @@ variable "vpc_cidr" {
 variable "azs" {
   description = "Availability zones to use (keep to 2 for cost — EKS requires min 2)"
   type        = list(string)
-  default     = ["us-east-1a", "us-east-1b"]
+  default     = ["ap-south-1a", "ap-south-1b"]
 }
 
 variable "public_subnet_cidrs" {
