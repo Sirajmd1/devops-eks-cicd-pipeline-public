@@ -26,21 +26,27 @@ pipeline {
     }
 
     stage('Build & Push Docker Image') {
-      steps {
-        dir('app') {
-          // Single quotes below = Groovy does NOT interpolate $ECR_REPO/$IMAGE_TAG/$AWS_REGION
-          // here; the shell expands them instead. This is what silences the
-          // "secret passed via Groovy String interpolation" warning.
-          sh '''
-            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REPO"
-            docker buildx build --platform linux/amd64 \
-              -t "$ECR_REPO:$IMAGE_TAG" \
-              -t "$ECR_REPO:latest" \
-              --push .
-          '''
-        }
+  steps {
+    withCredentials([
+      [$class: 'AmazonWebServicesCredentialsBinding',
+       credentialsId: 'aws-creds']
+    ]) {
+      dir('app') {
+        sh '''
+          aws sts get-caller-identity
+
+          aws ecr get-login-password --region "$AWS_REGION" | \
+          docker login --username AWS --password-stdin "$ECR_REPO"
+
+          docker buildx build --platform linux/amd64 \
+            -t "$ECR_REPO:$IMAGE_TAG" \
+            -t "$ECR_REPO:latest" \
+            --push .
+        '''
       }
     }
+  }
+}
 
     stage('Deploy to EKS') {
       steps {
