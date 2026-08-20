@@ -3,20 +3,19 @@ pipeline {
 
   environment {
     AWS_REGION   = 'ap-south-1'
-    ECR_REPO     = credentials('ecr-repo-url')       // e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/devops-eks-cicd-dev-app
+    ECR_REPO     = credentials('ecr-repo-url')
     IMAGE_TAG    = "${env.BUILD_NUMBER}"
     CLUSTER_NAME = 'devops-eks-cicd-dev-eks'
   }
 
   stages {
-
     stage('Checkout') {
       steps {
         checkout scm
       }
     }
 
-    stage('Install & Unit Test') {
+    stage('Install and Unit Test') {
       steps {
         dir('app') {
           sh 'npm ci --cache .npm-cache'
@@ -24,86 +23,94 @@ pipeline {
         }
       }
     }
-stage('Verify AWS') {
-  steps {
-    withCredentials([
-      [$class: 'AmazonWebServicesCredentialsBinding',
-       credentialsId: 'aws-creds']
-    ]) {
-      sh 'aws sts get-caller-identity'
+
+    stage('Build and Push Docker Image') {
+      steps {
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding',
+           credentialsId: 'aws-creds']
+        ]) {
+          dir('app') {
+            sh '''
+              aws sts get-caller-identity
+
+              aws ecr get-login-password --region "$AWS_REGION" |
+                docker login \
+                  --username AWS \
+                  --password-stdin "$ECR_REPO"
+
+              docker buildx build \
+                --platform linux/amd64 \
+                -t "$ECR_REPO:$IMAGE_TAG" \
+                -t "$ECR_REPO:latest" \
+                --push .
+            '''
+          }
+        }
+      }
     }
-  }
-}
-    stage('Build & Push Docker Image') {
-  steps {
-    withCredentials([
-      [$class: 'AmazonWebServicesCredentialsBinding',
-       credentialsId: 'aws-creds']
-    ]) {
-      dir('app') {
-        sh '''
-          aws sts get-caller-identity
 
-          aws ecr get-login-password --region "$AWS_REGION" | \
-          docker login --username AWS --password-stdin "$ECR_REPO"
+    stage('Deploy to EKS') {
+      steps {
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding',
+           credentialsId: 'aws-creds']
+        ]) {
+          sh '''
+            aws eks update-kubeconfig \
+              --region "$AWS_REGION" \
+              --name "$CLUSTER_NAME"
 
-          docker buildx build --platform linux/amd64 \
-            -t "$ECR_REPO:$IMAGE_TAG" \
-            -t "$ECR_REPO:latest" \
-            --push .
-        '''
+            kubectl apply -f k8s/namespace.yaml
+
+            sed -e "s|IMAGE_PLACEHOLDER|$ECR_REPO:$IMAGE_TAG|" \
+              k8s/deployment.yaml |
+              kubectl apply -f -
+
+            kubectl apply -f k8s/service.yaml
+            kubectl apply -f k8s/hpa.yaml
+            kubectl apply -f k8s/ingress.yaml
+          '''
+        }
+      }
+    }
+
+    stage('Verify Rollout') {
+      steps {
+        withCredentials([
+          [$class: 'AmazonWebServicesCredentialsBinding',
+           credentialsId: 'aws-creds']
+        ]) {
+          sh '''
+            aws eks update-kubeconfig \
+              --region "$AWS_REGION" \
+              --name "$CLUSTER_NAME"
+
+            kubectl rollout status \
+              deployment/devops-demo-api \
+              --namespace devops-demo \
+              --timeout=120s
+
+            kubectl get pods \
+              --namespace devops-demo \
+              --output wide
+          '''
+        }
       }
     }
   }
-}
-
-   stage('Deploy to EKS') {
-  steps {
-    withCredentials([
-      [$class: 'AmazonWebServicesCredentialsBinding',
-       credentialsId: 'aws-creds']
-    ]) {
-      sh '''
-        aws eks update-kubeconfig \
-          --region "$AWS_REGION" \
-          --name "$CLUSTER_NAME"
-
-        kubectl apply -f k8s/namespace.yaml
-        sed -e "s|IMAGE_PLACEHOLDER|$ECR_REPO:$IMAGE_TAG|" \
-          k8s/deployment.yaml | kubectl apply -f -
-      '''
-    }
-  }
-}
-
-    stage('Verify Rollout') {
-  steps {
-    withCredentials([
-      [$class: 'AmazonWebServicesCredentialsBinding',
-       credentialsId: 'aws-creds']
-    ]) {
-      sh '''
-        aws eks update-kubeconfig \
-          --region "$AWS_REGION" \
-          --name "$CLUSTER_NAME"
-
-        kubectl rollout status deployment/devops-demo-api \
-          -n devops-demo \
-          --timeout=120s
-      '''
-    }
-  }
-}
 
   post {
     success {
       echo "Deployed build ${IMAGE_TAG} to ${CLUSTER_NAME}"
     }
+
     failure {
-      echo "Pipeline failed — check stage logs above. Wire a Slack/email notifier here for real alerts."
+      echo 'Pipeline failed. Review the failed stage logs.'
     }
+
     always {
-      sh 'docker image prune -f' // 💰 don't let build images pile up on the Jenkins host disk
+      sh 'docker image prune -f || true'
     }
   }
 }
